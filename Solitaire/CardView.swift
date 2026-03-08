@@ -1,5 +1,8 @@
+// CardView.swift — UIView subclass that renders a single playing card. Displays
+// either the face (suit, rank, card image) or the card back provided by
+// CardBackManager. Observes CardBackDidChange notifications so the back image
+// updates immediately when the user switches styles without requiring a redeal.
 //
-//  CardView.swift
 //  CardStacks
 //
 //  Created by Gary on 4/22/19.
@@ -29,10 +32,19 @@ enum Suit: Int {
 }
 
 
+/**
+ * @decision DEC-CARDBACK-002
+ * @title CardView observes CardBackDidChange rather than holding a style reference
+ * @status accepted
+ * @rationale Each CardView independently observes the notification so the
+ *   manager needs no view registry. The backgroundImageView frame is set to
+ *   CGRect(origin:.zero, size:frame.size) — using the raw `frame` caused the
+ *   image to be offset by the card's position in the superview's coordinate
+ *   space, clipping the card back graphic.
+ */
 // UIView that displays a card
 final class CardView: UIView {
-    static let faceDownImage = UIImage(named: "images/PlayingCard-back.png")
-    
+
     // the card value is its position in the 0..51 array of possible card values. see
     // getCardSuitAndRank to see how suit and rank are determined from the value
     var cardValue = 0       // suit and rank of card
@@ -145,14 +157,30 @@ final class CardView: UIView {
         self.rankLabel.text = getDisplayValueForRank(rank: rank)
         self.rankLabel.textColor = color
         self.rankLabel.font = UIFont(name: "Palatino-Bold", size: scaled(value: 16.0))
-        self.backgroundImageView.image = CardView.faceDownImage
-        
+        self.backgroundImageView.image = CardBackManager.shared.currentImage
+
         self.addSubview(self.mainImageView)
         self.addSubview(self.suitImageView)
         self.addSubview(self.rankLabel)
         self.addSubview(self.backgroundImageView)
+
+        // Refresh the card back image whenever the user switches styles.
+        NotificationCenter.default.addObserver(
+            self,
+            selector: #selector(cardBackDidChange),
+            name: .cardBackDidChange,
+            object: nil
+        )
     }
-    
+
+    @objc private func cardBackDidChange() {
+        self.backgroundImageView.image = CardBackManager.shared.currentImage
+    }
+
+    deinit {
+        NotificationCenter.default.removeObserver(self, name: .cardBackDidChange, object: nil)
+    }
+
     override init(frame: CGRect) {
         let imageFrame = CGRect(x: 2.0, y: frame.height * 0.40, width: frame.width - 4.0, height: frame.height * 0.60 - 2.0)
         self.mainImageView = UIImageView(frame: imageFrame)
@@ -166,7 +194,9 @@ final class CardView: UIView {
         let suitFrame = CGRect(x: frame.width - width - 4, y: scaled(value: 2.0), width: width, height: height)
         self.suitImageView = UIImageView(frame: suitFrame)
         
-        self.backgroundImageView = UIImageView(frame: frame)
+        self.backgroundImageView = UIImageView(frame: CGRect(origin: .zero, size: frame.size))
+        self.backgroundImageView.contentMode = .scaleAspectFill
+        self.backgroundImageView.clipsToBounds = true
         self.backgroundImageView.isHidden = true
         
         super.init(frame: frame)

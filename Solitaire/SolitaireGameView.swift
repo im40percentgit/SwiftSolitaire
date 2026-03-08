@@ -1,5 +1,9 @@
+// SolitaireGameView.swift — Root UIView for the solitaire game. Manages layout
+// of foundation stacks, tableau stacks, stock, talon, and control buttons.
+// Hosts the "Style" button that presents the card back style picker, and calls
+// CardBackManager.randomizeCorgi() on each new deal so every game shows a
+// different corgi image when corgi mode is active.
 //
-//  SolitaireGameView.swift
 //  CardStacks
 //
 //  Created by Gary on 4/22/19.
@@ -15,6 +19,7 @@ let CARD_HEIGHT = CARD_WIDTH * 1.42
 
 private extension Selector {
     static let handleTap = #selector(SolitaireGameView.newDealAction)
+    static let showStylePicker = #selector(SolitaireGameView.showCardBackPicker)
 }
 
 
@@ -75,6 +80,71 @@ final class SolitaireGameView: UIView {
         newDealButton.titleLabel?.font = .systemFont(ofSize: scaled(value: 14.0))
         newDealButton.addTarget(self, action: .handleTap, for: .touchUpInside)
         self.addSubview(newDealButton)
+
+        // Style button — right-aligned at the same vertical position as New Deal.
+        let styleButtonWidth = scaled(value: 60.0)
+        let styleButtonFrame = CGRect(
+            x: self.bounds.width - styleButtonWidth - 4.0,
+            y: scaled(value: 60.0),
+            width: styleButtonWidth,
+            height: scaled(value: 30.0)
+        )
+        let styleButton = UIButton(frame: styleButtonFrame)
+        styleButton.setTitle("Style", for: .normal)
+        styleButton.setTitleColor(.white, for: .normal)
+        styleButton.titleLabel?.font = .systemFont(ofSize: scaled(value: 14.0))
+        styleButton.autoresizingMask = [.flexibleLeftMargin]
+        styleButton.addTarget(self, action: .showStylePicker, for: .touchUpInside)
+        self.addSubview(styleButton)
+    }
+
+    // MARK: Card Back Style Picker
+
+    /**
+     * @decision DEC-CARDBACK-003
+     * @title UIAlertController action sheet for style selection
+     * @status accepted
+     * @rationale An action sheet is the idiomatic iOS pattern for choosing
+     *   between a small set of mutually-exclusive options. A checkmark on the
+     *   active choice gives instant visual feedback without requiring a
+     *   separate settings screen.
+     */
+    @objc func showCardBackPicker() {
+        let alert = UIAlertController(title: "Card Back Style", message: nil, preferredStyle: .actionSheet)
+        let current = CardBackManager.shared.style
+
+        let classicAction = UIAlertAction(
+            title: current == .classic ? "Classic ✓" : "Classic",
+            style: .default
+        ) { _ in
+            CardBackManager.shared.style = .classic
+        }
+
+        let corgiAction = UIAlertAction(
+            title: current == .corgi ? "Corgi ✓" : "Corgi",
+            style: .default
+        ) { _ in
+            CardBackManager.shared.style = .corgi
+        }
+
+        alert.addAction(classicAction)
+        alert.addAction(corgiAction)
+        alert.addAction(UIAlertAction(title: "Cancel", style: .cancel))
+
+        // Walk the responder chain to find the presenting view controller.
+        if let vc = self.findViewController() {
+            // On iPad, action sheets must be anchored to a source view.
+            if let popover = alert.popoverPresentationController {
+                popover.sourceView = self
+                popover.sourceRect = CGRect(
+                    x: self.bounds.width - scaled(value: 64.0),
+                    y: scaled(value: 60.0),
+                    width: scaled(value: 60.0),
+                    height: scaled(value: 30.0)
+                )
+            }
+            vc.present(alert, animated: true)
+        }
     }
     
     required init?(coder aDecoder: NSCoder) {
@@ -87,6 +157,7 @@ final class SolitaireGameView: UIView {
     }
     
     private func dealCards() {
+        CardBackManager.shared.randomizeCorgi()
         Game.sharedInstance.initalizeDeal()
         
         var tableauFrame = self.baseTableauFrameRect
