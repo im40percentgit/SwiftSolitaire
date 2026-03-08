@@ -1,5 +1,8 @@
+// Utils.swift — Shared utility extensions and helpers used across the Solitaire
+// app. Includes UIColor hex initialiser, a scale helper for adaptive layouts,
+// file path utilities, and a UIView responder-chain walker used to present
+// UIAlertControllers from within UIView subclasses.
 //
-//  Utils.swift
 //  LCFotos
 //
 //  Created by main on 4/11/16.
@@ -54,4 +57,19 @@ struct FileUtilities {
 //
 //}
 
+extension UIView {
+    /// Walks the responder chain upward to find the nearest UIViewController
+    /// that contains this view. Used to present UIAlertControllers from within
+    /// UIView subclasses that have no direct view-controller reference.
+    func findViewController() -> UIViewController? {
+        var responder: UIResponder? = self
+        while let r = responder {
+            if let vc = r as? UIViewController {
+                return vc
+            }
+            responder = r.next
+        }
+        return nil
+    }
+}
 
