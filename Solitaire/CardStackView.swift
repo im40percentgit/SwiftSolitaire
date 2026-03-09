@@ -218,34 +218,54 @@ final class FoundationCardStackView: PiledStackView {
 
 final class StockCardStackView: PiledStackView {
 
+    /// Set by SolitaireGameView.initStackViews() to record stock moves for undo.
+    /// Using a closure keeps this view decoupled from SolitaireGameView (DEC-UNDO-002).
+    var onMoveRecorded: ((Move) -> Void)?
+
     override init(frame: CGRect, cards: CardDataStack) {
         super.init(frame: frame)
-        
+
         self.cards = cards
         self.cards.delegate = self
-        
+
         let gesture = UITapGestureRecognizer(target: self, action: #selector(handleTap))
         self.gestureRecognizers = [gesture]
     }
-    
+
     override init(frame: CGRect) {
         super.init(frame: frame)
-        
     }
-    
+
     @objc func handleTap() -> Bool {
-        if let _ = self.cards.topCard() {
+        if let topCard = self.cards.topCard() {
+            // Capture card value before the move so the Move snapshot is accurate.
+            let cardSnapshot = topCard
             Game.sharedInstance.moveTopCard(from: Model.sharedInstance.stockStack, to: Model.sharedInstance.talonStack, faceUp: true, makeNewTopCardFaceup: false)
+            onMoveRecorded?(Move(
+                type: .stockToTalon,
+                cards: [cardSnapshot],
+                source: .stock,
+                destination: .talon,
+                didFlipSourceTopCard: false
+            ))
             return true
         } else {
-            // copy back from talon view
+            // Capture all talon cards before the copy so undo can restore them.
+            let talonSnapshot = Model.sharedInstance.talonStack.cards
             Game.sharedInstance.copyCards(from: Model.sharedInstance.talonStack, to: Model.sharedInstance.stockStack)
             Model.sharedInstance.talonStack.removeAllCards()
+            onMoveRecorded?(Move(
+                type: .recycleToStock,
+                cards: talonSnapshot,
+                source: .talon,
+                destination: .stock,
+                didFlipSourceTopCard: false
+            ))
         }
-    
+
         return false
     }
-    
+
     required init?(coder aDecoder: NSCoder) {
         fatalError("init(coder:) has not been implemented")
     }
