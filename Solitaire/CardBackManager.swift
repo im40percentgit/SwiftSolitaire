@@ -81,6 +81,23 @@ final class CardBackManager {
 
     // MARK: Public API
 
+    /// Returns the card back image for a specific card value.
+    ///
+    /// In corgi mode each of the 52 cards gets its own unique corgi image,
+    /// derived deterministically from the card's 0–51 value so the mapping
+    /// is stable across style-change notifications.
+    /// In classic mode every card shares the same `currentImage`.
+    func image(forCardValue value: Int) -> UIImage {
+        switch style {
+        case .classic:
+            return currentImage
+        case .corgi:
+            let index = (value % 52) + 1
+            let name = String(format: "images/corgi/corgi-%02d.jpg", index)
+            return UIImage(named: name) ?? currentImage
+        }
+    }
+
     /// Picks a new random corgi image and, if the current style is corgi,
     /// reloads `currentImage` and broadcasts `cardBackDidChange`.
     func randomizeCorgi() {

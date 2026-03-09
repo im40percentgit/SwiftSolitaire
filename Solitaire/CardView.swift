@@ -157,7 +157,7 @@ final class CardView: UIView {
         self.rankLabel.text = getDisplayValueForRank(rank: rank)
         self.rankLabel.textColor = color
         self.rankLabel.font = UIFont(name: "Palatino-Bold", size: scaled(value: 16.0))
-        self.backgroundImageView.image = CardBackManager.shared.currentImage
+        self.backgroundImageView.image = CardBackManager.shared.image(forCardValue: value)
 
         self.addSubview(self.mainImageView)
         self.addSubview(self.suitImageView)
@@ -174,7 +174,7 @@ final class CardView: UIView {
     }
 
     @objc private func cardBackDidChange() {
-        self.backgroundImageView.image = CardBackManager.shared.currentImage
+        self.backgroundImageView.image = CardBackManager.shared.image(forCardValue: self.cardValue)
     }
 
     deinit {
