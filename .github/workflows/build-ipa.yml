@@ -26,24 +26,6 @@ jobs:
             PROVISIONING_PROFILE_SPECIFIER="" \
             -derivedDataPath build
 
-      - name: Re-sign with ldid for sideloading
-        run: |
-          brew install ldid
-          APP_PATH="build/Build/Products/Release-iphoneos/Solitaire.app"
-          cat > /tmp/ent.xml << 'ENTXML'
-          <?xml version="1.0" encoding="UTF-8"?>
-          <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-          <plist version="1.0">
-          <dict>
-            <key>platform-application</key>
-            <true/>
-            <key>get-task-allow</key>
-            <true/>
-          </dict>
-          </plist>
-          ENTXML
-          ldid -S/tmp/ent.xml "$APP_PATH/Solitaire"
-
       - name: Package IPA
         run: |
           mkdir -p Payload
