@@ -244,8 +244,29 @@ final class SolitaireGameView: UIView {
     // from any state where a face-down card ended up on top.
     private func ensureTableauTopCardsFaceUp() {
         for stackView in tableauStackViews {
-            stackView.flipTopCard()
+            if let topCard = stackView.cards.topCard(), !topCard.faceUp {
+                stackView.flipTopCard()
+                stackView.refresh()
+            }
         }
+    }
+
+    /// Restores any in-flight drag cards to their source stack and resets all
+    /// drag state. Safe to call even if stackDraggedFrom is nil (cards are lost
+    /// but the view recovers). Called from touchesBegan guard, touchesCancelled,
+    /// and any other path that needs to abort a drag.
+    private func restoreDraggedCards() {
+        if let src = stackDraggedFrom {
+            dragView.cards.cards.forEach { card in src.cards.addCard(card: card) }
+            src.refresh()
+        }
+        dragView.removeFromSuperview()
+        dragView.removeAllCardViews()
+        Model.sharedInstance.dragStack.removeAllCards()
+        dragView.bounds = CGRect.zero
+        doingDrag = false
+        stackDraggedFrom = nil
+        ensureTableauTopCardsFaceUp()
     }
 
 }
@@ -256,25 +277,18 @@ extension SolitaireGameView {
     override func touchesBegan(_ touches: Set<UITouch>,
                                with event: UIEvent?) {
         let touch = touches.first!
+
+        // Guard MUST run before the double-tap check. If a tapCount>1 event
+        // arrives while doingDrag is true and we check taps first, we return
+        // early and the in-flight cards are silently orphaned.
+        if doingDrag {
+            restoreDraggedCards()
+        }
+
         let tapCount = touch.tapCount
         if tapCount > 1 {
             handleDoubleTap(inView: touch.view!)
             return
-        }
-
-        // Guard: if a drag is already in progress (multitouch or rapid tap),
-        // restore the in-flight cards to their source stack before starting fresh.
-        // Mirrors the touchesCancelled restore path.
-        if doingDrag {
-            if let src = stackDraggedFrom {
-                dragView.cards.cards.forEach { card in src.cards.addCard(card: card) }
-                src.refresh()
-            }
-            dragView.removeFromSuperview()
-            dragView.removeAllCardViews()
-            dragView.bounds = CGRect.zero
-            doingDrag = false
-            ensureTableauTopCardsFaceUp()
         }
 
         if let touchedView = touch.view {
@@ -350,22 +364,20 @@ extension SolitaireGameView {
         guard doingDrag else {
             return
         }
-        
-        dragView.cards.cards.forEach{ card in stackDraggedFrom!.cards.addCard(card: card) }
-        dragView.removeFromSuperview()
-        dragView.removeAllCardViews()
-        
-        dragView.bounds = CGRect.zero
-        doingDrag = false
+        restoreDraggedCards()
     }
     
     override func touchesEnded(_ touches: Set<UITouch>,
                                with event: UIEvent?) {
         if doingDrag {
+            guard let source = stackDraggedFrom else {
+                restoreDraggedCards()
+                return
+            }
             var done = false
             let dragFrame = dragView.convert(dragView.bounds, to: self)
 
-            for view in tableauStackViews where view != stackDraggedFrom! {
+            for view in tableauStackViews where view !== source {
                 let viewFrame = view.convert(view.bounds, to: self)
                 if viewFrame.intersects(dragFrame) {
                     // if a drop here is valid, move card and break out of loop
@@ -403,7 +415,7 @@ extension SolitaireGameView {
             }
 
             if (!done && dragView.cards.cards.count == 1) {      // can only drag one card at a time to Foundation stack
-                for view in foundationStacks where view != stackDraggedFrom! {
+                for view in foundationStacks where view !== source {
                     let viewFrame = view.convert(view.bounds, to: self)
                     if viewFrame.intersects(dragFrame) {
                         // if a drop here is valid, move card and break out of loop
@@ -438,17 +450,17 @@ extension SolitaireGameView {
             }
 
             if !done {
-                // card(s) couldn't be dropped, so put them back
-                dragView.cards.cards.forEach{ card in stackDraggedFrom!.cards.addCard(card: card) }
+                restoreDraggedCards()
+            } else {
+                // Successful drop — clean up drag view without restoring cards.
+                dragView.removeFromSuperview()
+                dragView.removeAllCardViews()
+                Model.sharedInstance.dragStack.removeAllCards()
+                dragView.bounds = CGRect.zero
+                doingDrag = false
+                stackDraggedFrom = nil
+                ensureTableauTopCardsFaceUp()
             }
-
-            dragView.removeFromSuperview()
-            dragView.removeAllCardViews()
-
-            dragView.bounds = CGRect.zero
-            doingDrag = false
-
-            ensureTableauTopCardsFaceUp()
         }
     }
 }
