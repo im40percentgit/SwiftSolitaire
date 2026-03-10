@@ -4,6 +4,15 @@
 // CardBackManager.randomizeCorgi() on each new deal so every game shows a
 // different corgi image when corgi mode is active.
 //
+// Drag handling: touchesBegan now guards against mid-drag re-entry (multitouch
+// or rapid tap) by restoring in-flight cards to their source stack before starting
+// a new drag. Force-unwrap on card index replaced with nil-safe if-let.
+// ensureTableauTopCardsFaceUp() called as defense-in-depth after drag completion.
+//
+// Undo: every move (drag-drop, double-tap, stock-to-talon, recycle) is recorded
+// in Game.sharedInstance.moveHistory. The Undo button calls undoAction() which
+// pops the last Move and reverses it against the live data stacks.
+//
 // Win animation: when all 52 cards reach the foundation stacks, startWinAnimation()
 // launches a classic Windows-Solitaire-style bouncing card cascade. Cards fly up
 // from their foundation positions with randomised velocity and bounce off the
@@ -26,6 +35,7 @@ let CARD_HEIGHT = CARD_WIDTH * 1.42
 private extension Selector {
     static let handleTap = #selector(SolitaireGameView.newDealAction)
     static let showStylePicker = #selector(SolitaireGameView.showCardBackPicker)
+    static let handleUndo = #selector(SolitaireGameView.undoAction)
 }
 
 
@@ -92,7 +102,14 @@ final class SolitaireGameView: UIView {
         foundationRect = foundationRect.offsetBy(dx: CGFloat(CARD_WIDTH + SPACING), dy: 0.0)
         self.stockStackView = StockCardStackView(frame: foundationRect, cards: Model.sharedInstance.stockStack)
         self.addSubview(self.stockStackView)
-        
+
+        // Wire move recording callback for stock tap (stock-to-talon and recycle).
+        // Using a closure keeps StockCardStackView decoupled from SolitaireGameView.
+        // See DEC-UNDO-002 in MASTER_PLAN.md.
+        self.stockStackView.onMoveRecorded = { move in
+            Game.sharedInstance.recordMove(move)
+        }
+
         var gameStackRect = baseRect.offsetBy(dx: 0.0, dy: CGFloat(CARD_HEIGHT + scaled(value: 12.0)))
         self.baseTableauFrameRect = gameStackRect
         for index in 0 ..< 7 {
@@ -109,6 +126,20 @@ final class SolitaireGameView: UIView {
         newDealButton.titleLabel?.font = .systemFont(ofSize: scaled(value: 14.0))
         newDealButton.addTarget(self, action: .handleTap, for: .touchUpInside)
         self.addSubview(newDealButton)
+
+        // Undo button — right of New Deal, same vertical position.
+        let undoButtonFrame = CGRect(
+            x: buttonFrame.maxX + 8.0,
+            y: scaled(value: 60.0),
+            width: scaled(value: 55.0),
+            height: scaled(value: 30.0)
+        )
+        let undoButton = UIButton(frame: undoButtonFrame)
+        undoButton.setTitle("Undo", for: .normal)
+        undoButton.setTitleColor(.white, for: .normal)
+        undoButton.titleLabel?.font = .systemFont(ofSize: scaled(value: 14.0))
+        undoButton.addTarget(self, action: .handleUndo, for: .touchUpInside)
+        self.addSubview(undoButton)
 
         // Style button — right-aligned at the same vertical position as New Deal.
         let styleButtonWidth = scaled(value: 60.0)
@@ -207,7 +238,16 @@ final class SolitaireGameView: UIView {
             cardValuesIndex += 1
         }
     }
-    
+
+    // Defense-in-depth: ensure all non-empty tableau stacks have their top card
+    // face-up. Called after drag cleanup and at end of touchesEnded to recover
+    // from any state where a face-down card ended up on top.
+    private func ensureTableauTopCardsFaceUp() {
+        for stackView in tableauStackViews {
+            stackView.flipTopCard()
+        }
+    }
+
 }
 
 // MARK: Handle dragging
@@ -221,7 +261,22 @@ extension SolitaireGameView {
             handleDoubleTap(inView: touch.view!)
             return
         }
-        
+
+        // Guard: if a drag is already in progress (multitouch or rapid tap),
+        // restore the in-flight cards to their source stack before starting fresh.
+        // Mirrors the touchesCancelled restore path.
+        if doingDrag {
+            if let src = stackDraggedFrom {
+                dragView.cards.cards.forEach { card in src.cards.addCard(card: card) }
+                src.refresh()
+            }
+            dragView.removeFromSuperview()
+            dragView.removeAllCardViews()
+            dragView.bounds = CGRect.zero
+            doingDrag = false
+            ensureTableauTopCardsFaceUp()
+        }
+
         if let touchedView = touch.view {
             Model.sharedInstance.dragStack.removeAllCards()
             dragView.removeAllCardViews()
@@ -236,27 +291,29 @@ extension SolitaireGameView {
                     if cardView.isFaceUp && cardView.point(inside: t, with: event) {
                         stackDraggedFrom = touchedView as? CardStackView
                         let dragCard = Card(value: cardView.cardValue, faceUp: true)
-                        if  let index = stackDraggedFrom!.cards.cards.firstIndex(where: { $0.value == dragCard.value })  {
+                        if let index = stackDraggedFrom?.cards.cards.firstIndex(where: { $0.value == dragCard.value }) {
                             // card that was touched
                             doingDrag = true
                             dragView.frame = cardView.convert(cardView.bounds, to: self)
                             self.addSubview(dragView)
                             Model.sharedInstance.dragStack.addCard(card: dragCard)
-                            
+
                             // add any cards above it
-                            if index < stackDraggedFrom!.cards.cards.endIndex - 1 {
-                                for i in index + 1 ... stackDraggedFrom!.cards.cards.endIndex - 1 {
+                            let endIndex = stackDraggedFrom!.cards.cards.endIndex - 1
+                            if index < endIndex {
+                                for i in index + 1 ... endIndex {
                                     let card = stackDraggedFrom!.cards.cards[i]
                                     Model.sharedInstance.dragStack.addCard(card: card)
                                 }
                             }
-                            
+
                             // the cards are now in the drag view so remove them from the stack
                             for card in Model.sharedInstance.dragStack.cards {
-                                let index = stackDraggedFrom!.cards.cards.firstIndex { $0.value == card.value }
-                                stackDraggedFrom!.cards.cards.remove(at: index!)
+                                if let cardIndex = stackDraggedFrom!.cards.cards.firstIndex(where: { $0.value == card.value }) {
+                                    stackDraggedFrom!.cards.cards.remove(at: cardIndex)
+                                }
                             }
-                            
+
                             stackDraggedFrom?.refresh()
                             dragView.refresh()
                             dragPosition = touchPoint
@@ -307,26 +364,44 @@ extension SolitaireGameView {
         if doingDrag {
             var done = false
             let dragFrame = dragView.convert(dragView.bounds, to: self)
-            
+
             for view in tableauStackViews where view != stackDraggedFrom! {
                 let viewFrame = view.convert(view.bounds, to: self)
                 if viewFrame.intersects(dragFrame) {
                     // if a drop here is valid, move card and break out of loop
                     if view.cards.canAccept(droppedCard: dragView.cards.cards.first!) {
-                        for card in Model.sharedInstance.dragStack.cards {
+                        let movedCards = Model.sharedInstance.dragStack.cards
+                        // Detect if source top (the new top after removal) was face-down —
+                        // that means flipTopCard() will flip it, so didFlipSourceTopCard = true.
+                        var didFlip = false
+                        if let src = stackDraggedFrom as? TableauStackView,
+                           let newTop = src.cards.topCard() {
+                            didFlip = !newTop.faceUp
+                        }
+                        for card in movedCards {
                             view.cards.addCard(card: card)
-                            if let stack = stackDraggedFrom as? TableauStackView {
-                                stack.flipTopCard()
-                                stack.refresh()
-                            }
+                        }
+                        if let stack = stackDraggedFrom as? TableauStackView {
+                            stack.flipTopCard()
+                            stack.refresh()
                         }
                         view.refresh()
+
+                        if let src = stackDraggedFrom {
+                            Game.sharedInstance.recordMove(Move(
+                                type: .dragDrop,
+                                cards: movedCards,
+                                source: stackIdentifier(for: src),
+                                destination: stackIdentifier(for: view),
+                                didFlipSourceTopCard: didFlip
+                            ))
+                        }
                         done = true
                         break
                     }
                 }
             }
-            
+
             if (!done && dragView.cards.cards.count == 1) {      // can only drag one card at a time to Foundation stack
                 for view in foundationStacks where view != stackDraggedFrom! {
                     let viewFrame = view.convert(view.bounds, to: self)
@@ -334,10 +409,24 @@ extension SolitaireGameView {
                         // if a drop here is valid, move card and break out of loop
                         if view.cards.canAccept(droppedCard: dragView.cards.cards.first!) {
                             let card = Model.sharedInstance.dragStack.cards.first!
+                            var didFlip = false
+                            if let src = stackDraggedFrom as? TableauStackView,
+                               let newTop = src.cards.topCard() {
+                                didFlip = !newTop.faceUp
+                            }
                             view.cards.addCard(card: card)
                             if let stack = stackDraggedFrom as? TableauStackView {
                                 stack.flipTopCard()
                                 stack.refresh()
+                            }
+                            if let src = stackDraggedFrom {
+                                Game.sharedInstance.recordMove(Move(
+                                    type: .dragDrop,
+                                    cards: [card],
+                                    source: stackIdentifier(for: src),
+                                    destination: stackIdentifier(for: view),
+                                    didFlipSourceTopCard: didFlip
+                                ))
                             }
                         }
                         done = true
@@ -347,17 +436,19 @@ extension SolitaireGameView {
                     }
                 }
             }
-            
+
             if !done {
-                // card(s) could be dropped, so put them back
+                // card(s) couldn't be dropped, so put them back
                 dragView.cards.cards.forEach{ card in stackDraggedFrom!.cards.addCard(card: card) }
             }
-            
+
             dragView.removeFromSuperview()
             dragView.removeAllCardViews()
-            
+
             dragView.bounds = CGRect.zero
             doingDrag = false
+
+            ensureTableauTopCardsFaceUp()
         }
     }
 }
@@ -373,35 +464,157 @@ extension SolitaireGameView {
     func handleDoubleTap(inView: UIView) {
         if let talonStack = inView as? TalonCardStackView {
             if let card = talonStack.cards.topCard() {
-                if self.addCardToFoundation(card: card) {
+                if let foundationIndex = self.addCardToFoundation(card: card) {
                     talonStack.cards.popCards(numberToPop: 1, makeNewTopCardFaceup: true)
+                    Game.sharedInstance.recordMove(Move(
+                        type: .doubleTap,
+                        cards: [card],
+                        source: .talon,
+                        destination: .foundation(foundationIndex),
+                        didFlipSourceTopCard: false
+                    ))
                 }
             }
         } else if let tableauStack = inView as? TableauStackView {
             if let card = tableauStack.cards.topCard() {
-                if self.addCardToFoundation(card: card) {
+                if let foundationIndex = self.addCardToFoundation(card: card) {
+                    // Detect if the card below (new top after pop) was face-down before
+                    // popCards flips it with makeNewTopCardFaceup:true.
+                    let newTopWasFaceDown: Bool
+                    if tableauStack.cards.cards.count >= 2 {
+                        let cardBelowTop = tableauStack.cards.cards[tableauStack.cards.cards.count - 2]
+                        newTopWasFaceDown = !cardBelowTop.faceUp
+                    } else {
+                        newTopWasFaceDown = false
+                    }
                     tableauStack.cards.popCards(numberToPop: 1, makeNewTopCardFaceup: true)
+                    Game.sharedInstance.recordMove(Move(
+                        type: .doubleTap,
+                        cards: [card],
+                        source: stackIdentifier(for: tableauStack),
+                        destination: .foundation(foundationIndex),
+                        didFlipSourceTopCard: newTopWasFaceDown
+                    ))
                 }
             }
         }
     }
-    
-    private func addCardToFoundation(card: Card) -> Bool {
-        var addedCard = false
 
-        for stack in self.foundationStacks {
+    /// Tries to place `card` on one of the four foundation stacks.
+    /// Returns the foundation index on success, nil on failure.
+    private func addCardToFoundation(card: Card) -> Int? {
+        var foundIndex: Int? = nil
+
+        for (index, stack) in self.foundationStacks.enumerated() {
             if stack.cards.canAccept(droppedCard: card) {
                 stack.cards.addCard(card: card)
-                addedCard = true
+                foundIndex = index
                 break
             }
         }
 
-        if addedCard {
+        if foundIndex != nil {
             checkForWin()
         }
 
-        return addedCard
+        return foundIndex
+    }
+}
+
+// MARK: Undo
+extension SolitaireGameView {
+
+    /// Reverses the most recent recorded move, restoring data stacks and refreshing views.
+    @objc func undoAction() {
+        guard !isAnimatingWin, Game.sharedInstance.canUndo else { return }
+        let history = Game.sharedInstance.moveHistory
+        let move = history.last!
+        // Rebuild history without the popped move.
+        Game.sharedInstance.clearMoveHistory()
+        for m in history.dropLast() { Game.sharedInstance.recordMove(m) }
+
+        switch move.type {
+        case .dragDrop, .doubleTap:
+            let destDataStack = dataStack(for: move.destination)
+            let destViewStack = stackView(for: move.destination)
+            let srcDataStack  = dataStack(for: move.source)
+            let srcViewStack  = stackView(for: move.source)
+
+            // Remove the moved cards from destination.
+            destDataStack.cards.removeLast(move.cards.count)
+
+            // Un-flip source top card if it was flipped as a side-effect.
+            if move.didFlipSourceTopCard, let topCard = srcDataStack.topCard() {
+                srcDataStack.cards.removeLast()
+                srcDataStack.cards.append(Card(value: topCard.value, faceUp: false))
+            }
+
+            // Restore cards to source in original order.
+            for card in move.cards {
+                srcDataStack.cards.append(card)
+            }
+
+            srcViewStack.refresh()
+            destViewStack.refresh()
+
+        case .stockToTalon:
+            let talonData = Model.sharedInstance.talonStack
+            let stockData = Model.sharedInstance.stockStack
+            // Pop from talon, push back to stock face-down.
+            if let card = talonData.topCard() {
+                talonData.cards.removeLast()
+                stockData.cards.append(Card(value: card.value, faceUp: false))
+            }
+            talonStackView.refresh()
+            stockStackView.refresh()
+
+        case .recycleToStock:
+            // Restore: clear stock, put saved talon cards back in talon face-up.
+            Model.sharedInstance.stockStack.removeAllCards()
+            for card in move.cards {
+                Model.sharedInstance.talonStack.addCard(card: Card(value: card.value, faceUp: true))
+            }
+            talonStackView.refresh()
+            stockStackView.refresh()
+        }
+    }
+}
+
+// MARK: Stack Identifier Helpers
+extension SolitaireGameView {
+
+    /// Maps a CardStackView instance to its StackIdentifier enum value.
+    fileprivate func stackIdentifier(for stackView: CardStackView) -> StackIdentifier {
+        if let index = tableauStackViews.firstIndex(where: { $0 === stackView }) {
+            return .tableau(index)
+        }
+        if let index = foundationStacks.firstIndex(where: { $0 === stackView }) {
+            return .foundation(index)
+        }
+        if stackView === talonStackView {
+            return .talon
+        }
+        return .stock
+    }
+
+    /// Returns the data stack for a given StackIdentifier.
+    fileprivate func dataStack(for identifier: StackIdentifier) -> CardDataStack {
+        switch identifier {
+        case .tableau(let i):    return Model.sharedInstance.tableauStacks[i]
+        case .foundation(let i): return Model.sharedInstance.foundationStacks[i]
+        case .talon:             return Model.sharedInstance.talonStack
+        case .stock:             return Model.sharedInstance.stockStack
+        }
+    }
+
+    /// Returns the view stack for a given StackIdentifier.
+    fileprivate func stackView(for identifier: StackIdentifier) -> CardStackView {
+        switch identifier {
+        case .tableau(let i):    return tableauStackViews[i]
+        case .foundation(let i): return foundationStacks[i]
+        case .talon:             return talonStackView
+        case .stock:             return stockStackView
+        }
     }
 }
 
